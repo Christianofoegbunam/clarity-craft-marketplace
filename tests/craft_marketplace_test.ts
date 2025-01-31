@@ -7,8 +7,6 @@ import {
 } from 'https://deno.land/x/clarinet@v1.0.0/index.ts';
 import { assertEquals } from 'https://deno.land/std@0.90.0/testing/asserts.ts';
 
-// Previous tests remain...
-
 Clarinet.test({
     name: "Escrow system: Can create and complete escrow transaction",
     async fn(chain: Chain, accounts: Map<string, Account>) {
@@ -56,7 +54,7 @@ Clarinet.test({
 });
 
 Clarinet.test({
-    name: "Escrow system: Can refund escrow",
+    name: "Escrow system: Can refund escrow when expired",
     async fn(chain: Chain, accounts: Map<string, Account>) {
         const seller = accounts.get('wallet_1')!;
         const buyer = accounts.get('wallet_2')!;
@@ -77,11 +75,16 @@ Clarinet.test({
             ], buyer.address)
         ]);
         
-        // Refund escrow
+        // Mine blocks to simulate time passing
+        for (let i = 0; i < 150; i++) {
+            chain.mineBlock([]);
+        }
+        
+        // Anyone can refund expired escrow
         let refundBlock = chain.mineBlock([
             Tx.contractCall('craft_marketplace', 'refund-escrow', [
                 types.uint(1)
-            ], seller.address)
+            ], accounts.get('wallet_3')!.address)
         ]);
         
         refundBlock.receipts[0].result.expectOk().expectBool(true);
@@ -95,6 +98,6 @@ Clarinet.test({
         );
         
         const escrowData = escrow.result.expectSome().expectTuple();
-        assertEquals(escrowData['status'], "refunded");
+        assertEquals(escrowData['status'], "expired");
     }
 });
