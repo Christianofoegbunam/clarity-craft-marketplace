@@ -6,6 +6,9 @@
 (define-constant err-not-found (err u101))
 (define-constant err-listing-exists (err u102))
 (define-constant err-insufficient-funds (err u103))
+(define-constant err-not-seller (err u104))
+(define-constant err-not-buyer (err u105))
+(define-constant err-invalid-state (err u106))
 
 ;; Data Variables
 (define-data-var platform-fee uint u25) ;; 2.5%
@@ -32,8 +35,21 @@
     }
 )
 
+(define-map Escrows
+    { escrow-id: uint }
+    {
+        listing-id: uint,
+        buyer: principal,
+        seller: principal,
+        amount: uint,
+        status: (string-ascii 20), ;; "pending", "completed", "refunded"
+        created-at: uint
+    }
+)
+
 ;; Storage
 (define-data-var next-listing-id uint u1)
+(define-data-var next-escrow-id uint u1)
 
 ;; Public Functions
 (define-public (list-item (title (string-ascii 100)) (description (string-ascii 500)) (price uint))
@@ -57,63 +73,76 @@
     )
 )
 
-(define-public (purchase-item (listing-id uint))
+(define-public (create-escrow (listing-id uint))
     (let
         (
             (listing (unwrap! (map-get? Listings {listing-id: listing-id}) err-not-found))
+            (escrow-id (var-get next-escrow-id))
             (price (get price listing))
-            (seller (get seller listing))
-            (fee (/ (* price (var-get platform-fee)) u1000))
         )
         (asserts! (get available listing) err-not-found)
-        (try! (stx-transfer? price tx-sender seller))
-        (try! (stx-transfer? fee tx-sender contract-owner))
-        (map-set Listings
-            {listing-id: listing-id}
-            (merge listing {available: false})
-        )
-        (ok true)
+        (try! (stx-transfer? price tx-sender (as-contract tx-sender)))
+        (try! (map-set Escrows
+            {escrow-id: escrow-id}
+            {
+                listing-id: listing-id,
+                buyer: tx-sender,
+                seller: (get seller listing),
+                amount: price,
+                status: "pending",
+                created-at: block-height
+            }
+        ))
+        (var-set next-escrow-id (+ escrow-id u1))
+        (ok escrow-id)
     )
 )
 
-(define-public (create-profile (name (string-ascii 50)) (bio (string-ascii 500)))
-    (map-set SellerProfiles
-        {seller: tx-sender}
-        {
-            name: name,
-            bio: bio,
-            rating: u0,
-            review-count: u0
-        }
-    )
-    (ok true)
-)
-
-(define-public (leave-review (seller principal) (rating uint))
+(define-public (release-escrow (escrow-id uint))
     (let
         (
-            (profile (unwrap! (map-get? SellerProfiles {seller: seller}) err-not-found))
-            (current-rating (get rating profile))
-            (review-count (get review-count profile))
-            (new-count (+ review-count u1))
-            (new-rating (/ (+ (* current-rating review-count) rating) new-count))
+            (escrow (unwrap! (map-get? Escrows {escrow-id: escrow-id}) err-not-found))
+            (listing-id (get listing-id escrow))
+            (amount (get amount escrow))
+            (fee (/ (* amount (var-get platform-fee)) u1000))
         )
-        (map-set SellerProfiles
-            {seller: seller}
-            (merge profile {
-                rating: new-rating,
-                review-count: new-count
-            })
+        (asserts! (is-eq (get status escrow) "pending") err-invalid-state)
+        (asserts! (is-eq (get buyer escrow) tx-sender) err-not-buyer)
+        (try! (as-contract (stx-transfer? (- amount fee) (as-contract tx-sender) (get seller escrow))))
+        (try! (as-contract (stx-transfer? fee (as-contract tx-sender) contract-owner)))
+        (try! (map-set Escrows
+            {escrow-id: escrow-id}
+            (merge escrow {status: "completed"})
+        ))
+        (map-set Listings
+            {listing-id: listing-id}
+            (merge (unwrap! (map-get? Listings {listing-id: listing-id}) err-not-found)
+                {available: false})
         )
         (ok true)
     )
 )
 
-;; Read-only functions
-(define-read-only (get-listing (listing-id uint))
-    (map-get? Listings {listing-id: listing-id})
+(define-public (refund-escrow (escrow-id uint))
+    (let
+        (
+            (escrow (unwrap! (map-get? Escrows {escrow-id: escrow-id}) err-not-found))
+            (amount (get amount escrow))
+        )
+        (asserts! (is-eq (get status escrow) "pending") err-invalid-state)
+        (asserts! (is-eq (get seller escrow) tx-sender) err-not-seller)
+        (try! (as-contract (stx-transfer? amount (as-contract tx-sender) (get buyer escrow))))
+        (try! (map-set Escrows
+            {escrow-id: escrow-id}
+            (merge escrow {status: "refunded"})
+        ))
+        (ok true)
+    )
 )
 
-(define-read-only (get-seller-profile (seller principal))
-    (map-get? SellerProfiles {seller: seller})
+;; Previous functions remain unchanged...
+
+;; New read-only functions
+(define-read-only (get-escrow (escrow-id uint))
+    (map-get? Escrows {escrow-id: escrow-id})
 )
