@@ -11,6 +11,8 @@ A decentralized marketplace for artisans and crafters to list and sell their han
   - Buyer funds held in escrow until approval
   - Seller protection with secure fund release
   - Refund capability for dispute resolution
+  - Automatic escrow expiration after 24 hours
+  - Anyone can trigger refund of expired escrows
 
 ## Getting Started
 1. Clone the repository
@@ -37,3 +39,5 @@ The marketplace includes a secure escrow system to protect both buyers and selle
 3. Upon receiving and approving the item, buyer releases the escrow
 4. Seller can initiate refund if needed
 5. Platform fee is automatically handled during escrow release
+6. Escrows automatically expire after 24 hours
+7. Anyone can trigger refund of expired escrows to protect buyers
