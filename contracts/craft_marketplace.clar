@@ -9,9 +9,11 @@
 (define-constant err-not-seller (err u104))
 (define-constant err-not-buyer (err u105))
 (define-constant err-invalid-state (err u106))
+(define-constant err-escrow-expired (err u107))
 
-;; Data Variables
+;; Data Variables 
 (define-data-var platform-fee uint u25) ;; 2.5%
+(define-data-var escrow-timeout uint u144) ;; ~24 hours in blocks
 
 ;; Data Maps
 (define-map Listings
@@ -19,7 +21,7 @@
     {
         seller: principal,
         title: (string-ascii 100),
-        description: (string-ascii 500),
+        description: (string-ascii 500), 
         price: uint,
         available: bool
     }
@@ -42,7 +44,7 @@
         buyer: principal,
         seller: principal,
         amount: uint,
-        status: (string-ascii 20), ;; "pending", "completed", "refunded"
+        status: (string-ascii 20), ;; "pending", "completed", "refunded", "expired"
         created-at: uint
     }
 )
@@ -50,6 +52,11 @@
 ;; Storage
 (define-data-var next-listing-id uint u1)
 (define-data-var next-escrow-id uint u1)
+
+;; Helper Functions
+(define-private (is-escrow-expired (escrow { listing-id: uint, buyer: principal, seller: principal, amount: uint, status: (string-ascii 20), created-at: uint }))
+    (> block-height (+ (get created-at escrow) (var-get escrow-timeout)))
+)
 
 ;; Public Functions
 (define-public (list-item (title (string-ascii 100)) (description (string-ascii 500)) (price uint))
@@ -108,6 +115,7 @@
         )
         (asserts! (is-eq (get status escrow) "pending") err-invalid-state)
         (asserts! (is-eq (get buyer escrow) tx-sender) err-not-buyer)
+        (asserts! (not (is-escrow-expired escrow)) err-escrow-expired)
         (try! (as-contract (stx-transfer? (- amount fee) (as-contract tx-sender) (get seller escrow))))
         (try! (as-contract (stx-transfer? fee (as-contract tx-sender) contract-owner)))
         (try! (map-set Escrows
@@ -130,19 +138,24 @@
             (amount (get amount escrow))
         )
         (asserts! (is-eq (get status escrow) "pending") err-invalid-state)
-        (asserts! (is-eq (get seller escrow) tx-sender) err-not-seller)
+        (asserts! (or 
+            (is-eq (get seller escrow) tx-sender)
+            (is-escrow-expired escrow)
+        ) err-not-seller)
         (try! (as-contract (stx-transfer? amount (as-contract tx-sender) (get buyer escrow))))
         (try! (map-set Escrows
             {escrow-id: escrow-id}
-            (merge escrow {status: "refunded"})
+            (merge escrow {status: (if (is-escrow-expired escrow) "expired" "refunded")})
         ))
         (ok true)
     )
 )
 
-;; Previous functions remain unchanged...
-
-;; New read-only functions
+;; Read-only functions
 (define-read-only (get-escrow (escrow-id uint))
     (map-get? Escrows {escrow-id: escrow-id})
+)
+
+(define-read-only (get-escrow-timeout)
+    (var-get escrow-timeout)
 )
